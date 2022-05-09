@@ -11,6 +11,7 @@ import (
 	"github.com/elastic/elastic-agent/internal/pkg/agent/errors"
 	"github.com/elastic/elastic-agent/internal/pkg/composable"
 	"github.com/elastic/elastic-agent/internal/pkg/config"
+	"github.com/elastic/elastic-agent/internal/pkg/fleetapi/client"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
 
@@ -41,7 +42,7 @@ func (c *dynamicProvider) Run(comm composable.DynamicProviderComm) error {
 }
 
 // DynamicProviderBuilder builds the dynamic provider.
-func DynamicProviderBuilder(_ *logger.Logger, c *config.Config) (composable.DynamicProvider, error) {
+func DynamicProviderBuilder(_ *logger.Logger, c *config.Config, client client.Sender) (composable.DynamicProvider, error) {
 	p := &dynamicProvider{}
 	if c != nil {
 		err := c.Unpack(p)

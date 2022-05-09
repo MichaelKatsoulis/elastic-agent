@@ -5,6 +5,8 @@
 package kubernetes
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -18,8 +20,11 @@ import (
 
 	k8s "k8s.io/client-go/kubernetes"
 
+	"github.com/elastic/elastic-agent/internal/pkg/agent/application/info"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/errors"
 	"github.com/elastic/elastic-agent/internal/pkg/composable"
+	"github.com/elastic/elastic-agent/internal/pkg/fleetapi"
+	"github.com/elastic/elastic-agent/internal/pkg/fleetapi/client"
 )
 
 type pod struct {
@@ -32,6 +37,7 @@ type pod struct {
 	watcher          kubernetes.Watcher
 	nodeWatcher      kubernetes.Watcher
 	namespaceWatcher kubernetes.Watcher
+	fclient          client.Sender
 
 	// Mutex used by configuration updates not triggered by the main watcher,
 	// to avoid race conditions between cross updates and deletions.
@@ -51,7 +57,8 @@ func NewPodEventer(
 	cfg *Config,
 	logger *logp.Logger,
 	client k8s.Interface,
-	scope string) (Eventer, error) {
+	scope string,
+	fclient client.Sender) (Eventer, error) {
 	watcher, err := kubernetes.NewNamedWatcher("agent-pod", client, &kubernetes.Pod{}, kubernetes.WatchOptions{
 		SyncTimeout:  cfg.SyncPeriod,
 		Node:         cfg.Node,
@@ -95,6 +102,7 @@ func NewPodEventer(
 		watcher:          watcher,
 		nodeWatcher:      nodeWatcher,
 		namespaceWatcher: namespaceWatcher,
+		fclient:          fclient,
 	}
 
 	watcher.AddEventHandler(p)
@@ -156,11 +164,12 @@ func (p *pod) emitRunning(pod *kubernetes.Pod) {
 
 	// Emit all containers in the pod
 	// We should deal with init containers stopping after initialization
+	p.logger.Infof("pod emmit")
 	p.emitContainers(pod, namespaceAnnotations)
 }
 
 func (p *pod) emitContainers(pod *kubernetes.Pod, namespaceAnnotations mapstr.M) {
-	generateContainerData(p.comm, pod, p.metagen, namespaceAnnotations)
+	generateContainerData(p.comm, pod, p.metagen, namespaceAnnotations, p.fclient)
 }
 
 func (p *pod) emitStopped(pod *kubernetes.Pod) {
@@ -261,11 +270,17 @@ func generatePodData(
 	}
 }
 
+func checkForHints(annotations mapstr.M) bool {
+	exist, _ := annotations.HasKey("elastic-co-hints/package")
+	return exist
+}
+
 func generateContainerData(
 	comm composable.DynamicProviderComm,
 	pod *kubernetes.Pod,
 	kubeMetaGen metadata.MetaGen,
-	namespaceAnnotations mapstr.M) {
+	namespaceAnnotations mapstr.M,
+	client client.Sender) {
 
 	containers := kubernetes.GetContainersInPod(pod)
 
@@ -274,7 +289,9 @@ func generateContainerData(
 	for k, v := range pod.GetObjectMeta().GetAnnotations() {
 		_ = safemapstr.Put(annotations, k, v)
 	}
-
+	fmt.Println(annotations)
+	annotations.Delete("kubectl")
+	fmt.Println(pod.Name)
 	for _, c := range containers {
 		// If it doesn't have an ID, container doesn't exist in
 		// the runtime, emit only an event if we are stopping, so
@@ -301,7 +318,9 @@ func generateContainerData(
 		}
 		// add annotations to be discoverable by templates
 		k8sMapping["annotations"] = annotations
-
+		emitHints := checkForHints(annotations)
+		fmt.Println(emitHints)
+		fmt.Println(c.Spec.Name)
 		//container ECS fields
 		cmeta := mapstr.M{
 			"id":      c.ID,
@@ -344,11 +363,45 @@ func generateContainerData(
 				_, _ = containerMeta.Put("port", fmt.Sprintf("%v", port.ContainerPort))
 				_, _ = containerMeta.Put("port_name", port.Name)
 				k8sMapping["container"] = containerMeta
-				_ = comm.AddOrUpdate(eventID, ContainerPriority, k8sMapping, processors)
 			}
 		} else {
 			k8sMapping["container"] = containerMeta
+		}
+		if emitHints {
+			_, err := postMappingstoFleet(k8sMapping, client, "Start")
+			fmt.Printf("error is %+v", err)
+		} else {
 			_ = comm.AddOrUpdate(eventID, ContainerPriority, k8sMapping, processors)
 		}
 	}
+}
+
+func postMappingstoFleet(k8sMapping mapstr.M, client client.Sender, t string) (*fleetapi.HintsResponse, error) {
+	// hints
+	fmt.Println("inside post to fleet")
+	fmt.Printf("mapping is %+v\n", k8sMapping)
+	agentInfo, err := info.NewAgentInfo(false)
+	if err != nil {
+		return nil, err
+	}
+	kubMap := mapstr.M{}
+	kubMap.Put("kubernetes", k8sMapping)
+	fmt.Printf("new map is %+v", kubMap)
+	cmd := fleetapi.NewHintsCmd(agentInfo, client)
+	jsonbody, err := json.Marshal(kubMap)
+	if err != nil {
+		// do error check
+		return nil, err
+	}
+
+	hintsRequest := &fleetapi.HintsRequest{}
+	if err := json.Unmarshal(jsonbody, &hintsRequest); err != nil {
+		// do error check
+		return nil, err
+	}
+	hintsRequest.Type = t
+	ctx := context.Background()
+	resp, err := cmd.Execute(ctx, hintsRequest)
+	fmt.Printf("response is %+v", resp)
+	return resp, nil
 }

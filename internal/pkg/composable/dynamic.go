@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/elastic/elastic-agent/internal/pkg/config"
+	"github.com/elastic/elastic-agent/internal/pkg/fleetapi/client"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
 
@@ -34,7 +35,7 @@ type DynamicProvider interface {
 }
 
 // DynamicProviderBuilder creates a new dynamic provider based on the given config and returns it.
-type DynamicProviderBuilder func(log *logger.Logger, config *config.Config) (DynamicProvider, error)
+type DynamicProviderBuilder func(log *logger.Logger, config *config.Config, client client.Sender) (DynamicProvider, error)
 
 // AddDynamicProvider adds a new DynamicProviderBuilder
 func (r *providerRegistry) AddDynamicProvider(name string, builder DynamicProviderBuilder) error {

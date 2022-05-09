@@ -13,6 +13,7 @@ import (
 	"github.com/elastic/elastic-agent/internal/pkg/agent/errors"
 	"github.com/elastic/elastic-agent/internal/pkg/composable"
 	"github.com/elastic/elastic-agent/internal/pkg/config"
+	"github.com/elastic/elastic-agent/internal/pkg/fleetapi/client"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
 
@@ -36,10 +37,11 @@ func init() {
 type dynamicProvider struct {
 	logger *logger.Logger
 	config *Config
+	client client.Sender
 }
 
 // DynamicProviderBuilder builds the dynamic provider.
-func DynamicProviderBuilder(logger *logger.Logger, c *config.Config) (composable.DynamicProvider, error) {
+func DynamicProviderBuilder(logger *logger.Logger, c *config.Config, client client.Sender) (composable.DynamicProvider, error) {
 	var cfg Config
 	if c == nil {
 		c = config.New()
@@ -49,7 +51,7 @@ func DynamicProviderBuilder(logger *logger.Logger, c *config.Config) (composable
 		return nil, errors.New(err, "failed to unpack configuration")
 	}
 
-	return &dynamicProvider{logger, &cfg}, nil
+	return &dynamicProvider{logger, &cfg, client}, nil
 }
 
 // Run runs the kubernetes context provider.
@@ -139,7 +141,7 @@ func (p *dynamicProvider) newEventer(
 	client k8s.Interface) (Eventer, error) {
 	switch resourceType {
 	case "pod":
-		eventer, err := NewPodEventer(comm, p.config, p.logger, client, p.config.Scope)
+		eventer, err := NewPodEventer(comm, p.config, p.logger, client, p.config.Scope, p.client)
 		if err != nil {
 			return nil, err
 		}

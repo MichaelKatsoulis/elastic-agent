@@ -240,7 +240,7 @@ func applyDynamics(ctx context.Context, log *logger.Logger, cfg *config.Config) 
 			wg.Done()
 		}
 
-		ctrl, err := composable.New(log, cfg)
+		ctrl, err := composable.New(log, cfg, nil)
 		if err != nil {
 			return nil, err
 		}
